@@ -10,6 +10,7 @@
 #include "rules.h"
 #include <WiFi.h>
 #include <time.h>
+#include <math.h>
 #include "version.h"
 #if !defined(CONFIG_IDF_TARGET_ESP32)
 #include "driver/temperature_sensor.h"
@@ -30,18 +31,62 @@ extern temperature_sensor_handle_t g_temp_sensor;
 #endif
 
 static bool g_lcd_ok = false;
-static unsigned long g_lcd_last_draw = 0;
+static unsigned long g_lcd_last_poll = 0;
+static int g_uptime_y = 0;
 
-#define LCD_UPDATE_MS        1000
+#define LCD_POLL_MS          500
 #define LCD_ALERT_MS         8000
-#define LCD_ALERT_REFRESH_MS 400
+#define LCD_ALERT_REFRESH_MS 1000
+#define LCD_HEAP_DELTA       8192u
+#define LCD_RSSI_DELTA       5
+#define LCD_TEMP_DELTA       1.0f
 #define LCD_LINE_CHARS       26
 #define LCD_DIV_W            120
 #define LCD_STATUS_LH        10
+#define LCD_CLOCK_Y          58
+#define LCD_CLOCK_H          16
+
+struct LcdSnapshot {
+    wl_status_t wifi_status;
+    uint32_t    ip;
+    int8_t      rssi;
+    uint32_t    heap_free;
+    uint32_t    heap_total;
+    uint32_t    heap_min;
+    uint16_t    cpu_mhz;
+    uint32_t    flash_kb;
+    float       temp;
+    bool        have_temp;
+    int         history;
+    unsigned long llm_calls;
+    unsigned long last_llm_ms;
+    int         last_prompt_tok;
+    int         last_comp_tok;
+    int         rules;
+    bool        tg_enabled;
+    char        clock[16];
+    char        date[20];
+    char        uptime[24];
+    char        model[LCD_LINE_CHARS + 1];
+};
+
+static LcdSnapshot g_last_drawn;
+static bool g_have_last_drawn = false;
 
 static char g_alert_text[128];
 static bool g_alert_incoming = false;
 static unsigned long g_alert_until = 0;
+static bool g_was_alert = false;
+static unsigned long g_last_alert_footer = 999;
+
+static int lcdRuleCount() {
+    int count = 0;
+    const Rule *rules = ruleGetAll();
+    for (int i = 0; i < MAX_RULES; i++) {
+        if (rules[i].used) count++;
+    }
+    return count;
+}
 
 static void lcdSanitize(const char *src, char *dst, int dst_len) {
     int w = 0;
@@ -65,17 +110,116 @@ static void lcdDrawCard(int y, int h) {
     ws147LcdDrawHLine(4, y + h - 1, WS147_LCD_W - 8, WS147_COLOR_ACCENT);
 }
 
-static void lcdFormatUptime(char *buf, int len) {
-    unsigned long s = millis() / 1000;
-    unsigned long d = s / 86400;
-    unsigned long h = (s % 86400) / 3600;
-    unsigned long m = (s % 3600) / 60;
-    unsigned long sec = s % 60;
-    if (d > 0) {
-        snprintf(buf, len, "%lud %02luh %02lum %02lus", d, h, m, sec);
-    } else {
-        snprintf(buf, len, "%02luh %02lum %02lus", h, m, sec);
+static void lcdCollectSnapshot(LcdSnapshot *s) {
+    memset(s, 0, sizeof(*s));
+    s->wifi_status = WiFi.status();
+    if (s->wifi_status == WL_CONNECTED) {
+        s->ip = (uint32_t)WiFi.localIP();
+        s->rssi = (int8_t)WiFi.RSSI();
     }
+    s->heap_free = ESP.getFreeHeap();
+    s->heap_total = ESP.getHeapSize();
+    s->heap_min = ESP.getMinFreeHeap();
+    s->cpu_mhz = (uint16_t)ESP.getCpuFreqMHz();
+    s->flash_kb = (uint32_t)(ESP.getFlashChipSize() / 1024);
+#if !defined(CONFIG_IDF_TARGET_ESP32)
+    if (g_temp_sensor) {
+        s->have_temp = temperature_sensor_get_celsius(g_temp_sensor, &s->temp) == ESP_OK;
+    }
+#endif
+    s->history = historyCount;
+    s->llm_calls = g_llm_call_count;
+    s->last_llm_ms = g_last_llm_ms;
+    s->last_prompt_tok = g_last_prompt_tokens;
+    s->last_comp_tok = g_last_completion_tokens;
+    s->rules = lcdRuleCount();
+    s->tg_enabled = g_telegram_enabled;
+
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo, 0)) {
+        strftime(s->clock, sizeof(s->clock), "%H:%M:%S", &timeinfo);
+        strftime(s->date, sizeof(s->date), "%a %d %b %Y", &timeinfo);
+    } else {
+        strncpy(s->clock, "--:--:--", sizeof(s->clock) - 1);
+        strncpy(s->date, "SYNCING TIME", sizeof(s->date) - 1);
+    }
+
+    snprintf(s->uptime, sizeof(s->uptime), "%lus", millis() / 1000);
+
+    if (cfg_model[0]) {
+        lcdSanitize(cfg_model, s->model, sizeof(s->model));
+        if (strlen(s->model) > LCD_LINE_CHARS) {
+            s->model[LCD_LINE_CHARS - 1] = '\0';
+        }
+    }
+}
+
+static bool lcdMetricsChanged(const LcdSnapshot *cur) {
+    if (!g_have_last_drawn) return true;
+
+    if (cur->wifi_status != g_last_drawn.wifi_status) return true;
+    if (cur->ip != g_last_drawn.ip) return true;
+    if (abs((int)cur->rssi - (int)g_last_drawn.rssi) >= LCD_RSSI_DELTA) return true;
+
+    if (cur->heap_min != g_last_drawn.heap_min) return true;
+    if (cur->heap_free > g_last_drawn.heap_free) {
+        if (cur->heap_free - g_last_drawn.heap_free >= LCD_HEAP_DELTA) return true;
+    } else if (g_last_drawn.heap_free - cur->heap_free >= LCD_HEAP_DELTA) {
+        return true;
+    }
+    if (cur->heap_total != g_last_drawn.heap_total) return true;
+
+    if (cur->cpu_mhz != g_last_drawn.cpu_mhz) return true;
+    if (cur->flash_kb != g_last_drawn.flash_kb) return true;
+
+    if (cur->have_temp != g_last_drawn.have_temp) return true;
+    if (cur->have_temp &&
+        fabsf(cur->temp - g_last_drawn.temp) >= LCD_TEMP_DELTA) {
+        return true;
+    }
+
+    if (cur->history != g_last_drawn.history) return true;
+    if (cur->llm_calls != g_last_drawn.llm_calls) return true;
+    if (cur->last_llm_ms != g_last_drawn.last_llm_ms) return true;
+    if (cur->last_prompt_tok != g_last_drawn.last_prompt_tok) return true;
+    if (cur->last_comp_tok != g_last_drawn.last_comp_tok) return true;
+    if (cur->rules != g_last_drawn.rules) return true;
+    if (cur->tg_enabled != g_last_drawn.tg_enabled) return true;
+    if (strcmp(cur->date, g_last_drawn.date) != 0) return true;
+    if (strcmp(cur->model, g_last_drawn.model) != 0) return true;
+
+    return false;
+}
+
+static bool lcdClockChanged(const LcdSnapshot *cur) {
+    return !g_have_last_drawn || strcmp(cur->clock, g_last_drawn.clock) != 0;
+}
+
+static bool lcdUptimeChanged(const LcdSnapshot *cur) {
+    return !g_have_last_drawn || strcmp(cur->uptime, g_last_drawn.uptime) != 0;
+}
+
+static void lcdUpdateClockPartial(const char *clock) {
+    ws147LcdFillRect(0, LCD_CLOCK_Y, WS147_LCD_W, LCD_CLOCK_H, WS147_COLOR_BLACK);
+    ws147LcdDrawStringCentered(LCD_CLOCK_Y, clock, WS147_COLOR_WHITE, WS147_COLOR_BLACK, 2);
+}
+
+static void lcdUpdateDatePartial(const char *date) {
+    ws147LcdFillRect(0, 76, WS147_LCD_W, 10, WS147_COLOR_BLACK);
+    ws147LcdDrawStringCentered(78, date, WS147_COLOR_DARKGREY, WS147_COLOR_BLACK, 1);
+}
+
+static void lcdUpdateUptimePartial(const char *uptime, uint16_t color) {
+    if (g_uptime_y <= 0) return;
+    char buf[24];
+    snprintf(buf, sizeof(buf), "UPTIME %s", uptime);
+    ws147LcdFillRect(0, g_uptime_y, WS147_LCD_W, LCD_STATUS_LH, WS147_COLOR_BLACK);
+    ws147LcdDrawStringCentered(g_uptime_y, buf, color, WS147_COLOR_BLACK, 1);
+}
+
+static void lcdRememberSnapshot(const LcdSnapshot *s) {
+    g_last_drawn = *s;
+    g_have_last_drawn = true;
 }
 
 static void lcdDrawIdentityHeader() {
@@ -139,18 +283,20 @@ static void lcdDrawAlert() {
     }
 
     unsigned long left = (g_alert_until > millis()) ? (g_alert_until - millis()) / 1000 : 0;
+    g_last_alert_footer = left;
     char footer[28];
     snprintf(footer, sizeof(footer), "RETURN IN %lus", left);
     ws147LcdDrawStringCentered(WS147_LCD_H - 14, footer, WS147_COLOR_DARKGREY, WS147_COLOR_BLACK, 1);
 }
 
-static int lcdRuleCount() {
-    int count = 0;
-    const Rule *rules = ruleGetAll();
-    for (int i = 0; i < MAX_RULES; i++) {
-        if (rules[i].used) count++;
-    }
-    return count;
+static void lcdUpdateAlertFooter() {
+    unsigned long left = (g_alert_until > millis()) ? (g_alert_until - millis()) / 1000 : 0;
+    if (left == g_last_alert_footer) return;
+    g_last_alert_footer = left;
+    char footer[28];
+    snprintf(footer, sizeof(footer), "RETURN IN %lus", left);
+    ws147LcdFillRect(0, WS147_LCD_H - 16, WS147_LCD_W, 12, WS147_COLOR_BLACK);
+    ws147LcdDrawStringCentered(WS147_LCD_H - 14, footer, WS147_COLOR_DARKGREY, WS147_COLOR_BLACK, 1);
 }
 
 static void lcdStatusLine(int *y, const char *text, uint16_t fg, uint16_t bg = WS147_COLOR_BLACK) {
@@ -215,6 +361,7 @@ static void lcdDrawStatus() {
     lcdStatusLine(&y, buf, g_telegram_enabled ? WS147_COLOR_GREEN : WS147_COLOR_DARKGREY);
 
     unsigned long upSec = millis() / 1000;
+    g_uptime_y = y;
     snprintf(buf, sizeof(buf), "UPTIME %lus", upSec);
     lcdStatusLine(&y, buf, WS147_COLOR_YELLOW);
 
@@ -225,6 +372,10 @@ static void lcdDrawStatus() {
         }
         lcdStatusLine(&y, buf, WS147_COLOR_DARKGREY);
     }
+
+    LcdSnapshot snap;
+    lcdCollectSnapshot(&snap);
+    lcdRememberSnapshot(&snap);
 }
 
 void lcdTelegramAlert(bool incoming, const char *text) {
@@ -235,14 +386,18 @@ void lcdTelegramAlert(bool incoming, const char *text) {
     }
     g_alert_incoming = incoming;
     g_alert_until = millis() + LCD_ALERT_MS;
-    g_lcd_last_draw = 0;
+    g_was_alert = false;
+    g_last_alert_footer = 999;
+    g_lcd_last_poll = 0;
     lcdDrawAlert();
 }
 
 void lcdDisplayInit() {
     ws147LcdInit();
     g_lcd_ok = true;
-    g_lcd_last_draw = 0;
+    g_lcd_last_poll = 0;
+    g_have_last_drawn = false;
+    g_was_alert = false;
     lcdDisplayUpdate();
 }
 
@@ -254,17 +409,55 @@ void lcdDisplayUpdate() {
     if (!g_lcd_ok) return;
 
     unsigned long now = millis();
+    if (g_lcd_last_poll != 0 && (now - g_lcd_last_poll) < LCD_POLL_MS) return;
+    g_lcd_last_poll = now;
+
     bool alertActive = (g_alert_until > now);
-
-    unsigned long interval = alertActive ? LCD_ALERT_REFRESH_MS : LCD_UPDATE_MS;
-    if (g_lcd_last_draw != 0 && (now - g_lcd_last_draw) < interval) return;
-    g_lcd_last_draw = now;
-
     if (alertActive) {
-        lcdDrawAlert();
-    } else {
+        if (!g_was_alert) {
+            lcdDrawAlert();
+            g_was_alert = true;
+        } else {
+            lcdUpdateAlertFooter();
+        }
+        return;
+    }
+
+    if (g_was_alert) {
+        g_was_alert = false;
+        g_have_last_drawn = false;
         g_alert_text[0] = '\0';
+    }
+
+    LcdSnapshot cur;
+    lcdCollectSnapshot(&cur);
+
+    if (lcdMetricsChanged(&cur)) {
         lcdDrawStatus();
+        return;
+    }
+
+    bool partial = false;
+    if (lcdClockChanged(&cur)) {
+        lcdUpdateClockPartial(cur.clock);
+        partial = true;
+    }
+    if (strcmp(cur.date, g_last_drawn.date) != 0) {
+        lcdUpdateDatePartial(cur.date);
+        partial = true;
+    }
+    if (lcdUptimeChanged(&cur)) {
+        lcdUpdateUptimePartial(cur.uptime, WS147_COLOR_YELLOW);
+        partial = true;
+    }
+
+    if (partial) {
+        strncpy(g_last_drawn.clock, cur.clock, sizeof(g_last_drawn.clock) - 1);
+        g_last_drawn.clock[sizeof(g_last_drawn.clock) - 1] = '\0';
+        strncpy(g_last_drawn.date, cur.date, sizeof(g_last_drawn.date) - 1);
+        g_last_drawn.date[sizeof(g_last_drawn.date) - 1] = '\0';
+        strncpy(g_last_drawn.uptime, cur.uptime, sizeof(g_last_drawn.uptime) - 1);
+        g_last_drawn.uptime[sizeof(g_last_drawn.uptime) - 1] = '\0';
     }
 }
 
