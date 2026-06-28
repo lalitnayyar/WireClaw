@@ -24,6 +24,7 @@
 #include "version.h"
 #include "web_config.h"
 #include "nats_hal.h"
+#include "lcd_display.h"
 #include <nats_esp32.h>
 
 /*============================================================================
@@ -78,7 +79,9 @@ void led(uint8_t r, uint8_t g, uint8_t b) {
     r = (uint8_t)((r * ledBrightness) / 255);
     g = (uint8_t)((g * ledBrightness) / 255);
     b = (uint8_t)((b * ledBrightness) / 255);
-#ifdef RGB_BUILTIN
+#if defined(WIRECLAW_RGB_PIN)
+    rgbLedWrite(WIRECLAW_RGB_PIN, r, g, b);
+#elif defined(RGB_BUILTIN)
     rgbLedWrite(RGB_BUILTIN, r, g, b);
 #elif defined(LED_BUILTIN)
     pinMode(LED_BUILTIN, OUTPUT);
@@ -1695,6 +1698,9 @@ void setup() {
     devicesInit();
     rulesInit();
 
+    /* Onboard LCD (Waveshare ESP32-C6-LCD-1.47) */
+    lcdDisplayInit();
+
     if (cfg_wifi_ssid[0] == '\0') {
         Serial.printf("\n[!] No WiFi config — starting setup portal\n");
         runSetupPortal(); /* blocks until config saved + reboot */
@@ -1750,6 +1756,27 @@ void setup() {
 
     /* Web config portal (HTTP on port 80 + mDNS) */
     webConfigSetup();
+
+    /* Print benchmarks to serial (same data as web Status tab) */
+    {
+        float chip_temp = 0.0f;
+        bool have_temp = false;
+#if !defined(CONFIG_IDF_TARGET_ESP32)
+        if (g_temp_sensor) {
+            have_temp = temperature_sensor_get_celsius(g_temp_sensor, &chip_temp) == ESP_OK;
+        }
+#endif
+        Serial.printf("\n--- Status (web: http://%s/ Status tab) ---\n",
+                      WiFi.localIP().toString().c_str());
+        Serial.printf("Heap: %u / %u (min %u)\n",
+                      ESP.getFreeHeap(), ESP.getHeapSize(), ESP.getMinFreeHeap());
+        Serial.printf("CPU: %u MHz  Flash: %u KB\n",
+                      ESP.getCpuFreqMHz(), ESP.getFlashChipSize() / 1024);
+        if (have_temp) Serial.printf("Chip temp: %.1f C\n", chip_temp);
+        Serial.printf("LLM calls: %lu  History: %d turns\n",
+                      g_llm_call_count, historyCount);
+        Serial.printf("---\n");
+    }
 
     Serial.printf("\nReady! Free heap: %u bytes\n", ESP.getFreeHeap());
     Serial.printf("Type a message and press Enter. /help for commands.\n\n");
@@ -1809,6 +1836,9 @@ void loop() {
 
     /* Process web config requests */
     webConfigLoop();
+
+    /* Refresh onboard LCD status */
+    lcdDisplayUpdate();
 
     /* Process NATS */
     if (g_nats_enabled) {

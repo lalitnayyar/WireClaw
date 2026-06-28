@@ -562,7 +562,12 @@ void devicesReload() {
         deviceRegister("clock_hhmm", DEV_SENSOR_CLOCK_HHMM, PIN_NONE, "", false);
         changed = true;
     }
-#ifdef RGB_BUILTIN
+#if defined(WIRECLAW_RGB_PIN)
+    if (!deviceFind("rgb_led")) {
+        deviceRegister("rgb_led", DEV_ACTUATOR_RGB_LED, WIRECLAW_RGB_PIN, "", false);
+        changed = true;
+    }
+#elif defined(RGB_BUILTIN)
     if (!deviceFind("rgb_led")) {
         deviceRegister("rgb_led", DEV_ACTUATOR_RGB_LED, RGB_BUILTIN, "", false);
         changed = true;
@@ -732,7 +737,12 @@ void devicesInit() {
         deviceRegister("clock_hhmm", DEV_SENSOR_CLOCK_HHMM, PIN_NONE, "", false);
         changed = true;
     }
-#ifdef RGB_BUILTIN
+#if defined(WIRECLAW_RGB_PIN)
+    if (!deviceFind("rgb_led")) {
+        deviceRegister("rgb_led", DEV_ACTUATOR_RGB_LED, WIRECLAW_RGB_PIN, "", false);
+        changed = true;
+    }
+#elif defined(RGB_BUILTIN)
     if (!deviceFind("rgb_led")) {
         deviceRegister("rgb_led", DEV_ACTUATOR_RGB_LED, RGB_BUILTIN, "", false);
         changed = true;

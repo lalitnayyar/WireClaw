@@ -280,7 +280,7 @@ static void handlePostMemory() {
 }
 
 static void handleGetStatus() {
-    static char buf[1024];
+    static char buf[1536];
     unsigned long uptime = millis() / 1000;
     unsigned long days = uptime / 86400;
     unsigned long hours = (uptime % 86400) / 3600;
@@ -383,6 +383,7 @@ static void handleGetStatus() {
             g_telegram_enabled ? "enabled" : "disabled");
     }
 
+    server.sendHeader("Cache-Control", "no-store");
     server.send(200, "application/json", buf);
 }
 
@@ -730,15 +731,15 @@ nav button{padding:0.4rem 0.6rem;font-size:0.8rem}
 <span class="ver" id="hdr-ver"></span>
 </header>
 <nav>
-<button class="active" onclick="showTab('config')">Config</button>
-<button onclick="showTab('prompt')">Prompt</button>
-<button onclick="showTab('memory')">Memory</button>
-<button onclick="showTab('devices')">Devices</button>
-<button onclick="showTab('rules')">Rules</button>
-<button onclick="showTab('status')">Status</button>
+<button onclick="showTab('config',this)">Config</button>
+<button onclick="showTab('prompt',this)">Prompt</button>
+<button onclick="showTab('memory',this)">Memory</button>
+<button onclick="showTab('devices',this)">Devices</button>
+<button onclick="showTab('rules',this)">Rules</button>
+<button class="active" onclick="showTab('status',this)">Status</button>
 </nav>
 
-<div id="config" class="tab active">
+<div id="config" class="tab">
 <div class="card">
 <label>WiFi SSID</label>
 <input type="text" id="c_wifi_ssid">
@@ -817,9 +818,9 @@ nav button{padding:0.4rem 0.6rem;font-size:0.8rem}
 <p class="hint" style="margin-top:0.75rem">To create rules, chat with WireClaw.</p>
 </div>
 
-<div id="status" class="tab">
+<div id="status" class="tab active">
 <div class="card">
-<div class="status-grid" id="status-grid"></div>
+<div class="status-grid" id="status-grid"><div class="status-item full"><div class="label">Loading</div><div class="value">Fetching device status...</div></div></div>
 <div class="actions">
 <button class="btn btn-outline" onclick="loadStatus()">Refresh</button>
 <button class="btn btn-danger" onclick="reboot()">Reboot</button>
@@ -831,11 +832,11 @@ nav button{padding:0.4rem 0.6rem;font-size:0.8rem}
 <div class="toast" id="toast"></div>
 
 <script>
-function showTab(id){
+function showTab(id,btn){
 document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
 document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));
 document.getElementById(id).classList.add('active');
-event.target.classList.add('active');
+if(btn)btn.classList.add('active');
 if(statusTimer){clearInterval(statusTimer);statusTimer=null}
 if(id==='status'){loadStatus();statusTimer=setInterval(loadStatus,5000)}
 if(id==='prompt')loadPrompt();
@@ -844,6 +845,11 @@ if(id==='devices')loadDevices();
 if(id==='rules')loadRules();
 }
 var statusTimer=null;
+function startStatusPolling(){
+if(statusTimer){clearInterval(statusTimer);statusTimer=null}
+loadStatus();
+statusTimer=setInterval(loadStatus,5000);
+}
 function toast(msg,ok){
 var t=document.getElementById('toast');
 t.textContent=msg;t.className='toast show '+(ok?'ok':'err');
@@ -888,38 +894,45 @@ body:t}).then(r=>{if(r.ok)toast('Memory saved',true);else toast('Save failed',fa
 }).catch(e=>toast('Save failed',false));
 }
 function loadStatus(){
-fetch('/api/status').then(r=>r.json()).then(d=>{
+fetch('/api/status').then(function(r){
+if(!r.ok)throw new Error('HTTP '+r.status);
+return r.json();
+}).then(function(d){
 var items=[
 {section:'Device'},
-{l:'Version',v:d.version,cls:'accent'},
-{l:'Device',v:d.device_name},
-{l:'Uptime',v:d.uptime},
-{l:'IP Address',v:d.wifi_ip,cls:'accent'},
-{l:'WiFi',v:d.wifi_ssid+' ('+d.wifi_rssi+'dBm)',full:true},
-{l:'Model',v:d.model,full:true},
-{l:'NATS',v:d.nats},
-{l:'Telegram',v:d.telegram},
+{l:'Version',v:d.version||'-',cls:'accent'},
+{l:'Device',v:d.device_name||'-'},
+{l:'Uptime',v:d.uptime||'-'},
+{l:'IP Address',v:d.wifi_ip||'-',cls:'accent'},
+{l:'WiFi',v:(d.wifi_ssid||'-')+' ('+(d.wifi_rssi!=null?d.wifi_rssi:'?')+'dBm)',full:true},
+{l:'Model',v:d.model||'-',full:true},
+{l:'NATS',v:d.nats||'-'},
+{l:'Telegram',v:d.telegram||'-'},
 {section:'Benchmarks'},
-{l:'Heap',v:Math.round(d.heap_free/1024)+'KB free / '+Math.round(d.heap_total/1024)+'KB total'},
-{l:'Min Heap',v:Math.round(d.heap_min/1024)+'KB'},
-{l:'CPU',v:d.cpu_mhz+' MHz'},
-{l:'Flash',v:d.flash_kb+' KB'},
+{l:'Heap',v:Math.round((d.heap_free||0)/1024)+'KB free / '+Math.round((d.heap_total||0)/1024)+'KB total'},
+{l:'Min Heap',v:Math.round((d.heap_min||0)/1024)+'KB'},
+{l:'CPU',v:(d.cpu_mhz||0)+' MHz'},
+{l:'Flash',v:(d.flash_kb||0)+' KB'},
 ];
-if(d.chip_temp!==undefined)items.push({l:'Chip Temp',v:d.chip_temp.toFixed(1)+' \u00b0C'});
+if(d.chip_temp!==undefined&&d.chip_temp!==null)items.push({l:'Chip Temp',v:Number(d.chip_temp).toFixed(1)+' \u00b0C'});
 items=items.concat([
-{l:'LLM Calls',v:String(d.llm_calls)},
-{l:'Last LLM',v:d.last_llm_ms+' ms ('+d.last_prompt_tokens+'+'+d.last_completion_tokens+' tok)'},
-{l:'History',v:d.history_turns+' turns'},
-{l:'Rules',v:d.rules_count+' active'},
-{l:'Devices',v:d.devices_count+' registered'}
+{l:'LLM Calls',v:String(d.llm_calls!=null?d.llm_calls:0)},
+{l:'Last LLM',v:(d.last_llm_ms||0)+' ms ('+(d.last_prompt_tokens||0)+'+'+(d.last_completion_tokens||0)+' tok)'},
+{l:'History',v:(d.history_turns||0)+' turns'},
+{l:'Rules',v:(d.rules_count||0)+' active'},
+{l:'Devices',v:(d.devices_count||0)+' registered'}
 ]);
-var h='';items.forEach(i=>{
+var h='';items.forEach(function(i){
 if(i.section){h+='<div class="status-section">'+i.section+'</div>';return}
 h+='<div class="status-item'+(i.full?' full':'')+'"><div class="label">'+i.l+
 '</div><div class="value'+(i.cls?' '+i.cls:'')+'">'+i.v+'</div></div>';
 });
 document.getElementById('status-grid').innerHTML=h;
-}).catch(e=>toast('Failed to load status',false));
+}).catch(function(e){
+document.getElementById('status-grid').innerHTML=
+'<div class="status-item full"><div class="label">Error</div><div class="value">Could not load status. Open http://&lt;device-ip&gt;/ on the same WiFi network, then tap Refresh.</div></div>';
+toast('Failed to load status',false);
+});
 }
 function loadDevices(){
 fetch('/api/devices').then(r=>r.json()).then(devs=>{
@@ -987,9 +1000,10 @@ toast('Rebooting...',true);
 }).catch(()=>toast('Rebooting...',true));
 }
 loadConfig();
-fetch('/api/status').then(r=>r.json()).then(d=>{
-document.getElementById('hdr-ver').textContent='v'+d.version;
-}).catch(()=>{});
+startStatusPolling();
+fetch('/api/status').then(function(r){return r.json();}).then(function(d){
+if(d.version)document.getElementById('hdr-ver').textContent='v'+d.version;
+}).catch(function(){});
 </script>
 </body></html>)rawhtml";
 
@@ -1008,6 +1022,7 @@ void webConfigSetup() {
 
     /* Routes */
     server.on("/", HTTP_GET, []() {
+        server.sendHeader("Cache-Control", "no-store");
         server.send_P(200, "text/html", WEB_CONFIG_HTML);
     });
 

@@ -264,8 +264,8 @@ def main() -> int:
     parser.add_argument(
         "-e",
         "--env",
-        default="esp32-c6",
-        help="PlatformIO environment (default: esp32-c6)",
+        default="esp32-c6-lcd",
+        help="PlatformIO environment (default: esp32-c6-lcd for Waveshare 1.47\" LCD board; use esp32-c6 for plain DevKit)",
     )
     parser.add_argument(
         "-p",
