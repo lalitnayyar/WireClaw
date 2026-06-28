@@ -231,7 +231,13 @@ struct Turn {
 };
 
 static Turn history[MAX_HISTORY];
-static int  historyCount = 0;
+int historyCount = 0;
+
+/* Benchmark stats (web status / /status) */
+unsigned long g_last_llm_ms = 0;
+int           g_last_prompt_tokens = 0;
+int           g_last_completion_tokens = 0;
+unsigned long g_llm_call_count = 0;
 
 /*============================================================================
  * History Persistence (LittleFS)
@@ -508,6 +514,11 @@ const char *chatWithLLM(const char *userMessage) {
 
     unsigned long elapsed = millis() - t0;
 
+    g_last_llm_ms = elapsed;
+    g_last_prompt_tokens = totalPromptTokens;
+    g_last_completion_tokens = totalCompletionTokens;
+    if (ok) g_llm_call_count++;
+
     if (ok && finalContent && finalContent[0]) {
         if (!g_led_user) ledGreen();
 
@@ -629,25 +640,73 @@ static char cmdResponseBuf[1024];
  */
 static bool handleCommand(const char *cmd, char *buf, int buf_len) {
     if (strcmp(cmd, "status") == 0) {
-        snprintf(buf, buf_len,
-            "WiFi: %s (%s)\n"
-            "Heap: %u / %u\n"
-            "History: %d turns\n"
-            "Model: %s\n"
-            "Debug: %s\n"
-            "NATS: %s\n"
-            "Telegram: %s\n"
-            "Uptime: %lus",
-            WiFi.status() == WL_CONNECTED ? "connected" : "disconnected",
-            WiFi.localIP().toString().c_str(),
-            ESP.getFreeHeap(), ESP.getHeapSize(),
-            historyCount, cfg_model,
-            g_debug ? "ON" : "OFF",
-            g_nats_enabled
-                ? (g_nats_connected ? "connected" : "disconnected")
-                : "disabled",
-            g_telegram_enabled ? "enabled" : "disabled",
-            millis() / 1000);
+        float chip_temp = 0.0f;
+        bool have_temp = false;
+#if !defined(CONFIG_IDF_TARGET_ESP32)
+        if (g_temp_sensor) {
+            have_temp = temperature_sensor_get_celsius(g_temp_sensor, &chip_temp) == ESP_OK;
+        }
+#endif
+        int rule_count = 0;
+        const Rule *rules = ruleGetAll();
+        for (int i = 0; i < MAX_RULES; i++)
+            if (rules[i].used) rule_count++;
+
+        if (have_temp) {
+            snprintf(buf, buf_len,
+                "WiFi: %s (%s, %ddBm)\n"
+                "Heap: %u / %u (min %u)\n"
+                "CPU: %u MHz  Flash: %u KB\n"
+                "Chip temp: %.1f C\n"
+                "History: %d turns  LLM calls: %lu\n"
+                "Last LLM: %lums (%d+%d tok)\n"
+                "Rules: %d active\n"
+                "Model: %s\n"
+                "Debug: %s\n"
+                "NATS: %s\n"
+                "Telegram: %s\n"
+                "Uptime: %lus",
+                WiFi.status() == WL_CONNECTED ? "connected" : "disconnected",
+                WiFi.localIP().toString().c_str(), WiFi.RSSI(),
+                ESP.getFreeHeap(), ESP.getHeapSize(), ESP.getMinFreeHeap(),
+                ESP.getCpuFreqMHz(), ESP.getFlashChipSize() / 1024,
+                chip_temp,
+                historyCount, g_llm_call_count,
+                g_last_llm_ms, g_last_prompt_tokens, g_last_completion_tokens,
+                rule_count, cfg_model,
+                g_debug ? "ON" : "OFF",
+                g_nats_enabled
+                    ? (g_nats_connected ? "connected" : "disconnected")
+                    : "disabled",
+                g_telegram_enabled ? "enabled" : "disabled",
+                millis() / 1000);
+        } else {
+            snprintf(buf, buf_len,
+                "WiFi: %s (%s, %ddBm)\n"
+                "Heap: %u / %u (min %u)\n"
+                "CPU: %u MHz  Flash: %u KB\n"
+                "History: %d turns  LLM calls: %lu\n"
+                "Last LLM: %lums (%d+%d tok)\n"
+                "Rules: %d active\n"
+                "Model: %s\n"
+                "Debug: %s\n"
+                "NATS: %s\n"
+                "Telegram: %s\n"
+                "Uptime: %lus",
+                WiFi.status() == WL_CONNECTED ? "connected" : "disconnected",
+                WiFi.localIP().toString().c_str(), WiFi.RSSI(),
+                ESP.getFreeHeap(), ESP.getHeapSize(), ESP.getMinFreeHeap(),
+                ESP.getCpuFreqMHz(), ESP.getFlashChipSize() / 1024,
+                historyCount, g_llm_call_count,
+                g_last_llm_ms, g_last_prompt_tokens, g_last_completion_tokens,
+                rule_count, cfg_model,
+                g_debug ? "ON" : "OFF",
+                g_nats_enabled
+                    ? (g_nats_connected ? "connected" : "disconnected")
+                    : "disabled",
+                g_telegram_enabled ? "enabled" : "disabled",
+                millis() / 1000);
+        }
         return true;
     }
     if (strcmp(cmd, "clear") == 0) {
@@ -1699,19 +1758,41 @@ void setup() {
 
 /* LED heartbeat state */
 static unsigned long lastHeartbeat = 0;
-#define HEARTBEAT_INTERVAL_MS 3000
+#define HEARTBEAT_INTERVAL_MS  3000
+#define HEARTBEAT_TEMP_WARN_C  45.0f  /* orange pulse */
+#define HEARTBEAT_TEMP_HOT_C   55.0f  /* red pulse — chip running hot */
+
+/** Idle heartbeat pulse color from chip temperature (C6/S3/C3). */
+static void heartbeatPulse() {
+    uint8_t r = 0, g = 180, b = 140; /* WireClaw cyan when cool */
+
+#if !defined(CONFIG_IDF_TARGET_ESP32)
+    if (g_temp_sensor) {
+        float temp = 0.0f;
+        if (temperature_sensor_get_celsius(g_temp_sensor, &temp) == ESP_OK) {
+            if (temp >= HEARTBEAT_TEMP_HOT_C) {
+                r = 255; g = 0; b = 0;
+            } else if (temp >= HEARTBEAT_TEMP_WARN_C) {
+                r = 255; g = 80; b = 0;
+            }
+        }
+    }
+#endif
+
+    led(r, g, b);
+    delay(50);
+    ledOff();
+}
 
 void loop() {
     esp_task_wdt_reset(); /* Feed the watchdog */
 
-    /* LED heartbeat - brief dim green blink when idle */
+    /* LED heartbeat - colored pulse when idle (red if chip is hot) */
     if (!g_led_user) {
         unsigned long now = millis();
         if (now - lastHeartbeat > HEARTBEAT_INTERVAL_MS) {
             lastHeartbeat = now;
-            led(0, 40, 0); /* dim green */
-            delay(50);
-            ledOff();
+            heartbeatPulse();
         }
     }
 

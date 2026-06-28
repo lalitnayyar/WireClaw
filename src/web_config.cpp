@@ -14,6 +14,9 @@
 #include "version.h"
 #include "rules.h"
 #include "devices.h"
+#if !defined(CONFIG_IDF_TARGET_ESP32)
+#include "driver/temperature_sensor.h"
+#endif
 
 /* Externs from main.cpp */
 extern char cfg_wifi_ssid[64];
@@ -32,6 +35,14 @@ extern int  cfg_telegram_cooldown;
 extern bool g_nats_enabled;
 extern bool g_nats_connected;
 extern bool g_telegram_enabled;
+extern int  historyCount;
+extern unsigned long g_last_llm_ms;
+extern int           g_last_prompt_tokens;
+extern int           g_last_completion_tokens;
+extern unsigned long g_llm_call_count;
+#if !defined(CONFIG_IDF_TARGET_ESP32)
+extern temperature_sensor_handle_t g_temp_sensor;
+#endif
 
 static WebServer server(80);
 
@@ -269,35 +280,108 @@ static void handlePostMemory() {
 }
 
 static void handleGetStatus() {
-    static char buf[512];
+    static char buf[1024];
     unsigned long uptime = millis() / 1000;
     unsigned long days = uptime / 86400;
     unsigned long hours = (uptime % 86400) / 3600;
     unsigned long mins = (uptime % 3600) / 60;
     unsigned long secs = uptime % 60;
 
-    snprintf(buf, sizeof(buf),
-        "{"
-        "\"version\":\"%s\","
-        "\"device_name\":\"%s\","
-        "\"uptime\":\"%lud %luh %lum %lus\","
-        "\"uptime_seconds\":%lu,"
-        "\"heap_free\":%u,"
-        "\"heap_total\":%u,"
-        "\"wifi_ssid\":\"%s\","
-        "\"wifi_ip\":\"%s\","
-        "\"wifi_rssi\":%d,"
-        "\"model\":\"%s\","
-        "\"nats\":\"%s\","
-        "\"telegram\":\"%s\""
-        "}",
-        WIRECLAW_VERSION, cfg_device_name,
-        days, hours, mins, secs, uptime,
-        ESP.getFreeHeap(), ESP.getHeapSize(),
-        cfg_wifi_ssid, WiFi.localIP().toString().c_str(), WiFi.RSSI(),
-        cfg_model,
-        g_nats_enabled ? (g_nats_connected ? "connected" : "disconnected") : "disabled",
-        g_telegram_enabled ? "enabled" : "disabled");
+    int rule_count = 0;
+    const Rule *rules = ruleGetAll();
+    for (int i = 0; i < MAX_RULES; i++)
+        if (rules[i].used) rule_count++;
+
+    int dev_count = 0;
+    Device *devs = deviceGetAll();
+    for (int i = 0; i < MAX_DEVICES; i++)
+        if (devs[i].used) dev_count++;
+
+    float chip_temp = 0.0f;
+    bool have_temp = false;
+#if !defined(CONFIG_IDF_TARGET_ESP32)
+    if (g_temp_sensor) {
+        have_temp = temperature_sensor_get_celsius(g_temp_sensor, &chip_temp) == ESP_OK;
+    }
+#endif
+
+    if (have_temp) {
+        snprintf(buf, sizeof(buf),
+            "{"
+            "\"version\":\"%s\","
+            "\"device_name\":\"%s\","
+            "\"uptime\":\"%lud %luh %lum %lus\","
+            "\"uptime_seconds\":%lu,"
+            "\"heap_free\":%u,"
+            "\"heap_total\":%u,"
+            "\"heap_min\":%u,"
+            "\"cpu_mhz\":%u,"
+            "\"flash_kb\":%u,"
+            "\"chip_temp\":%.1f,"
+            "\"history_turns\":%d,"
+            "\"llm_calls\":%lu,"
+            "\"last_llm_ms\":%lu,"
+            "\"last_prompt_tokens\":%d,"
+            "\"last_completion_tokens\":%d,"
+            "\"rules_count\":%d,"
+            "\"devices_count\":%d,"
+            "\"wifi_ssid\":\"%s\","
+            "\"wifi_ip\":\"%s\","
+            "\"wifi_rssi\":%d,"
+            "\"model\":\"%s\","
+            "\"nats\":\"%s\","
+            "\"telegram\":\"%s\""
+            "}",
+            WIRECLAW_VERSION, cfg_device_name,
+            days, hours, mins, secs, uptime,
+            ESP.getFreeHeap(), ESP.getHeapSize(), ESP.getMinFreeHeap(),
+            ESP.getCpuFreqMHz(), ESP.getFlashChipSize() / 1024,
+            chip_temp,
+            historyCount, g_llm_call_count,
+            g_last_llm_ms, g_last_prompt_tokens, g_last_completion_tokens,
+            rule_count, dev_count,
+            cfg_wifi_ssid, WiFi.localIP().toString().c_str(), WiFi.RSSI(),
+            cfg_model,
+            g_nats_enabled ? (g_nats_connected ? "connected" : "disconnected") : "disabled",
+            g_telegram_enabled ? "enabled" : "disabled");
+    } else {
+        snprintf(buf, sizeof(buf),
+            "{"
+            "\"version\":\"%s\","
+            "\"device_name\":\"%s\","
+            "\"uptime\":\"%lud %luh %lum %lus\","
+            "\"uptime_seconds\":%lu,"
+            "\"heap_free\":%u,"
+            "\"heap_total\":%u,"
+            "\"heap_min\":%u,"
+            "\"cpu_mhz\":%u,"
+            "\"flash_kb\":%u,"
+            "\"history_turns\":%d,"
+            "\"llm_calls\":%lu,"
+            "\"last_llm_ms\":%lu,"
+            "\"last_prompt_tokens\":%d,"
+            "\"last_completion_tokens\":%d,"
+            "\"rules_count\":%d,"
+            "\"devices_count\":%d,"
+            "\"wifi_ssid\":\"%s\","
+            "\"wifi_ip\":\"%s\","
+            "\"wifi_rssi\":%d,"
+            "\"model\":\"%s\","
+            "\"nats\":\"%s\","
+            "\"telegram\":\"%s\""
+            "}",
+            WIRECLAW_VERSION, cfg_device_name,
+            days, hours, mins, secs, uptime,
+            ESP.getFreeHeap(), ESP.getHeapSize(), ESP.getMinFreeHeap(),
+            ESP.getCpuFreqMHz(), ESP.getFlashChipSize() / 1024,
+            historyCount, g_llm_call_count,
+            g_last_llm_ms, g_last_prompt_tokens, g_last_completion_tokens,
+            rule_count, dev_count,
+            cfg_wifi_ssid, WiFi.localIP().toString().c_str(), WiFi.RSSI(),
+            cfg_model,
+            g_nats_enabled ? (g_nats_connected ? "connected" : "disconnected") : "disabled",
+            g_telegram_enabled ? "enabled" : "disabled");
+    }
 
     server.send(200, "application/json", buf);
 }
@@ -610,6 +694,10 @@ text-transform:uppercase;letter-spacing:0.04em;margin-bottom:0.25rem}
 .status-item .value{font-size:0.95rem;color:var(--text);font-family:var(--mono);word-break:break-all}
 .status-item .value.accent{color:var(--accent)}
 .status-item.full{grid-column:1/-1}
+.status-section{grid-column:1/-1;font-size:0.72rem;color:var(--text3);font-family:var(--mono);
+text-transform:uppercase;letter-spacing:0.06em;margin:0.5rem 0 0;padding-top:0.75rem;
+border-top:1px solid var(--border)}
+.status-section:first-child{margin-top:0;padding-top:0;border-top:none}
 .rule{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:1rem;margin-bottom:0.75rem}
 .rule-hdr{display:flex;align-items:center;gap:0.5rem;margin-bottom:0.4rem}
 .rule-id{font-family:var(--mono);font-size:0.8rem;color:var(--accent);font-weight:600}
@@ -748,12 +836,14 @@ document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
 document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));
 document.getElementById(id).classList.add('active');
 event.target.classList.add('active');
-if(id==='status')loadStatus();
+if(statusTimer){clearInterval(statusTimer);statusTimer=null}
+if(id==='status'){loadStatus();statusTimer=setInterval(loadStatus,5000)}
 if(id==='prompt')loadPrompt();
 if(id==='memory')loadMemory();
 if(id==='devices')loadDevices();
 if(id==='rules')loadRules();
 }
+var statusTimer=null;
 function toast(msg,ok){
 var t=document.getElementById('toast');
 t.textContent=msg;t.className='toast show '+(ok?'ok':'err');
@@ -800,17 +890,31 @@ body:t}).then(r=>{if(r.ok)toast('Memory saved',true);else toast('Save failed',fa
 function loadStatus(){
 fetch('/api/status').then(r=>r.json()).then(d=>{
 var items=[
+{section:'Device'},
 {l:'Version',v:d.version,cls:'accent'},
 {l:'Device',v:d.device_name},
 {l:'Uptime',v:d.uptime},
-{l:'Heap',v:Math.round(d.heap_free/1024)+'KB / '+Math.round(d.heap_total/1024)+'KB'},
-{l:'WiFi',v:d.wifi_ssid+' ('+d.wifi_rssi+'dBm)',full:true},
 {l:'IP Address',v:d.wifi_ip,cls:'accent'},
+{l:'WiFi',v:d.wifi_ssid+' ('+d.wifi_rssi+'dBm)',full:true},
 {l:'Model',v:d.model,full:true},
 {l:'NATS',v:d.nats},
-{l:'Telegram',v:d.telegram}
+{l:'Telegram',v:d.telegram},
+{section:'Benchmarks'},
+{l:'Heap',v:Math.round(d.heap_free/1024)+'KB free / '+Math.round(d.heap_total/1024)+'KB total'},
+{l:'Min Heap',v:Math.round(d.heap_min/1024)+'KB'},
+{l:'CPU',v:d.cpu_mhz+' MHz'},
+{l:'Flash',v:d.flash_kb+' KB'},
 ];
+if(d.chip_temp!==undefined)items.push({l:'Chip Temp',v:d.chip_temp.toFixed(1)+' \u00b0C'});
+items=items.concat([
+{l:'LLM Calls',v:String(d.llm_calls)},
+{l:'Last LLM',v:d.last_llm_ms+' ms ('+d.last_prompt_tokens+'+'+d.last_completion_tokens+' tok)'},
+{l:'History',v:d.history_turns+' turns'},
+{l:'Rules',v:d.rules_count+' active'},
+{l:'Devices',v:d.devices_count+' registered'}
+]);
 var h='';items.forEach(i=>{
+if(i.section){h+='<div class="status-section">'+i.section+'</div>';return}
 h+='<div class="status-item'+(i.full?' full':'')+'"><div class="label">'+i.l+
 '</div><div class="value'+(i.cls?' '+i.cls:'')+'">'+i.v+'</div></div>';
 });
