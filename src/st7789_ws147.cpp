@@ -128,6 +128,18 @@ void ws147LcdFillRect(int x, int y, int w, int h, uint16_t color) {
     digitalWrite(PIN_CS, HIGH);
 }
 
+void ws147LcdDrawHLine(int x, int y, int w, uint16_t color) {
+    if (w <= 0) return;
+    ws147LcdFillRect(x, y, w, 1, color);
+}
+
+int ws147LcdStringWidth(const char *text, uint8_t scale) {
+    if (!text || !*text) return 0;
+    int chars = 0;
+    while (text[chars]) chars++;
+    return chars * (5 + 1) * scale;
+}
+
 /* 5x7 ASCII font, 96 chars from space (32) */
 static const uint8_t font5x7[] PROGMEM = {
     0x00,0x00,0x00,0x00,0x00, /* space */
@@ -227,6 +239,14 @@ void ws147LcdDrawString(int x, int y, const char *text, uint16_t color, uint16_t
     }
 }
 
+void ws147LcdDrawStringCentered(int y, const char *text, uint16_t color, uint16_t bg, uint8_t scale) {
+    if (!text || !*text) return;
+    int w = ws147LcdStringWidth(text, scale);
+    int x = (WS147_LCD_W - w) / 2;
+    if (x < 0) x = 0;
+    ws147LcdDrawString(x, y, text, color, bg, scale);
+}
+
 void ws147LcdDrawStringRainbow(int x, int y, const char *text, uint8_t scale) {
     if (!text) return;
     static const uint16_t colors[] = {
@@ -250,6 +270,14 @@ void ws147LcdDrawStringRainbow(int x, int y, const char *text, uint8_t scale) {
         if (cx > WS147_LCD_W - adv) break;
         text++;
     }
+}
+
+void ws147LcdDrawStringRainbowCentered(int y, const char *text, uint8_t scale) {
+    if (!text || !*text) return;
+    int w = ws147LcdStringWidth(text, scale);
+    int x = (WS147_LCD_W - w) / 2;
+    if (x < 0) x = 0;
+    ws147LcdDrawStringRainbow(x, y, text, scale);
 }
 
 #endif /* WIRECLAW_LCD_WS147 */

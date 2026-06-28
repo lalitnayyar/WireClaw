@@ -243,8 +243,8 @@ The rule loop and the AI loop share the same `loop()` function but serve differe
 - **NATS HAL** - direct hardware access over NATS (`{device}.hal.gpio.5.set "1"` → `ok`) - no LLM, no JSON, just raw request/reply for GPIO, ADC, PWM, UART, system info, and registered devices
 - **NATS Integration** - device-to-device messaging, commands, and rule-triggered events
 - **Web Config Portal** - browser-based UI at `http://<device-ip>/` for editing config, system prompt, memory, and viewing device status. mDNS: `http://<device-name>.local/`. **Status tab** shows live benchmarks (heap, CPU, flash, chip temp, LLM stats) with 5 s auto-refresh
-- **Onboard LCD (Waveshare ESP32-C6-LCD-1.47)** - 1.47" ST7789 172×320 status dashboard (2 s refresh), rainbow `owner_name` header, Telegram IN/OUT alert overlays (8 s). See [Onboard LCD Display](#onboard-lcd-display-waveshare-esp32-c6-lcd-147) and [installreadme.md](installreadme.md)
-- **Status & Benchmarks** - metrics on LCD, web Status tab, and serial `/status` (heap, CPU, flash, chip temp, LLM call count, tokens, uptime, rules)
+- **Onboard LCD (Waveshare ESP32-C6-LCD-1.47)** - professional **centered** status UI: live NTP clock & date, rainbow `owner_name`, `owner_phone`, full `/status` metrics (WiFi, heap, CPU, flash, temp, LLM, rules, Telegram, uptime, model — 1 s refresh), Telegram IN/OUT alerts (8 s). See [Onboard LCD Display](#onboard-lcd-display-waveshare-esp32-c6-lcd-147) and [installreadme.md](installreadme.md)
+- **Status & Benchmarks** - same metrics on LCD, web Status tab, and serial `/status` (heap, CPU, flash, chip temp, LLM call count, tokens, history, rules, Telegram, uptime)
 - **Serial Interface** - local chat and commands over USB (115200 baud)
 - **Conversation History** - 4-turn circular buffer, persisted across reboots
 
@@ -265,13 +265,44 @@ WireClaw drives the built-in **ST7789** panel directly (no LVGL/TFT_eSPI). Build
 
 | LCD feature | Description |
 |-------------|-------------|
-| **Status dashboard** | IP, heap, min heap, chip temp, CPU MHz, device name, WiFi RSSI, uptime, last LLM time/tokens, LLM call count, model |
-| **Refresh rate** | Status view updates every **2 seconds** |
-| **Rainbow owner name** | Set `owner_name` in `config.json` — displayed under the WireClaw header with a different color per letter |
-| **Telegram IN** | Green **TELEGRAM IN** banner + message preview when you text the bot (**8 s** overlay) |
-| **Telegram OUT** | Orange **TELEGRAM OUT** banner when WireClaw sends (AI reply, rule alert, startup ping) (**8 s** overlay) |
-| **Temp colors** | Chip temp line uses green / orange (≥ 45 °C) / red (≥ 55 °C) |
-| **RGB heartbeat** | GPIO8 LED pulses cyan (cool) / orange (warm) / red (hot) when not overridden by a tool |
+| **Professional UI** | Centered layout with accent dividers, identity header, and full status metrics block |
+| **Live clock & date** | NTP-synced `HH:MM:SS` and date line — updates every **1 second**; set `timezone` in config |
+| **Rainbow owner name** | `owner_name` in `config.json` — centered, one color per letter |
+| **Owner phone** | `owner_phone` in `config.json` — centered below date (e.g. `+971508320336`) |
+| **WiFi & network** | `WIFI OK (IP)`, RSSI in dBm, device name |
+| **Heap** | Free / total bytes and minimum heap since boot |
+| **CPU & flash** | CPU MHz and flash size (KB) |
+| **Chip temperature** | Degrees C — green / orange (≥ 45 °C) / red (≥ 55 °C) |
+| **LLM stats** | History turns, LLM calls, last latency, prompt+completion tokens |
+| **Rules & Telegram** | Active rule count; `TG ENABLED` or `TG OFF` |
+| **Uptime & model** | Seconds since boot; configured model (truncated if long) |
+| **Telegram IN** | Green **TELEGRAM IN** banner + centered message when you text the bot (**8 s**) |
+| **Telegram OUT** | Orange **TELEGRAM OUT** banner when WireClaw sends (**8 s**) |
+| **RGB heartbeat** | GPIO8 LED pulses cyan (cool) / orange (warm) / red (hot) |
+
+**Example LCD layout** (status lines match serial `/status`):
+
+```
+        ─────────────
+        WIRECLAW
+    LALIT NAYYAR (rainbow)
+        14:32:08
+      SUN 28 JUN 2026
+    +971508320336
+        ─────────────
+  WIFI OK (192.168.68.143)
+       -68dBM  wireclaw-01
+  HEAP 144920 / 252652
+  MIN 90576
+  CPU 160MHZ  FL 8192KB
+  TEMP 41.7 C
+  HIST 0  LLM 0
+  LAST 0ms (0+0 tok)
+  RULES 0 ACTIVE
+  TG ENABLED
+  UPTIME 98s
+  google/gemini-2.5-flash
+```
 
 **LCD SPI pins (fixed on board):** MOSI=6, SCLK=7, CS=14, DC=15, RST=21, BL=22
 
@@ -323,6 +354,7 @@ Edit `data/config.json`:
   "model": "google/gemini-2.5-flash",
   "device_name": "wireclaw-01",
   "owner_name": "Your Name",
+  "owner_phone": "+1234567890",
   "api_base_url": "",
   "nats_host": "",
   "nats_port": "4222",
@@ -333,7 +365,7 @@ Edit `data/config.json`:
 }
 ```
 
-`owner_name` is shown on the Waveshare LCD header in rainbow colors (requires `esp32-c6-lcd` build). Leave empty to hide the name line.
+`owner_name`, `owner_phone`, and `timezone` control the LCD personal header and live clock. They are set in `config.json` only — reflash with `python scripts/flash.py --fs-only` after changes. Leave empty to hide name or phone.
 
 Leave `telegram_token` empty to disable Telegram. Leave `nats_host` empty to disable NATS. Leave `api_base_url` empty to use OpenRouter (default).
 
@@ -369,8 +401,8 @@ The default target in this fork is **`esp32-c6-lcd`** (Waveshare 1.47" LCD board
 **Recommended (Python script):**
 
 ```powershell
-python scripts/flash.py --port COM3              # firmware + config (LCD board)
-python scripts/flash.py --port COM3 -e esp32-c6  # plain DevKit, no LCD
+python scripts/flash.py                              # firmware + config (LCD board)
+python scripts/flash.py -e esp32-c6                  # plain DevKit, no LCD
 python scripts/flash.py --port COM3 --monitor    # flash + serial monitor
 ```
 
@@ -397,9 +429,9 @@ After WiFi connects, check metrics in three places:
 
 | Where | How |
 |-------|-----|
-| **LCD** (Waveshare board) | Onboard screen — status every 2 s; Telegram alerts for 8 s |
+| **LCD** (Waveshare board) | Centered status UI — live clock (1 s), full `/status` metrics (WiFi, heap, CPU, flash, temp, LLM, rules, Telegram, uptime, model); Telegram alerts (8 s) |
 | **Web** | `http://<device-name>.local/` → **Status** tab (auto-refresh 5 s) |
-| **Serial** | `python scripts/flash.py --port COM3 --monitor` → type `/status` |
+| **Serial** | `python scripts/flash.py --monitor` → type `/status` |
 
 Type a message and press Enter in the serial monitor. Or open Telegram and text your bot — watch the LCD for **TELEGRAM IN** / **TELEGRAM OUT** alerts.
 
@@ -407,7 +439,7 @@ Type a message and press Enter in the serial monitor. Or open Telegram and text 
 
 | Document | Description |
 |----------|-------------|
-| **[Install & Flash (Windows / LCD)](installreadme.md)** | `flash.py`, Waveshare LCD board, benchmarks, Telegram LCD alerts, AVG/SSL troubleshooting |
+| **[Install & Flash (Windows / LCD)](installreadme.md)** | `flash.py`, professional centered LCD UI, full `/status` on-screen, clock/phone/metrics, Telegram alerts, AVG/SSL troubleshooting |
 | [Getting Started Examples](docs/EXAMPLES.md) | Walkthrough examples using just a bare dev board |
 | [Configuration Reference](docs/CONFIGURATION.md) | Setup portal, web config, config fields, local LLM, persistent memory |
 | [Device Registry](docs/DEVICE-REGISTRY.md) | All sensor and actuator types |

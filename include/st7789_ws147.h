@@ -20,11 +20,17 @@
 #define WS147_COLOR_ORANGE    0xFD20
 #define WS147_COLOR_MAGENTA   0xF81F
 #define WS147_COLOR_DARKGREY  0x4208
+#define WS147_COLOR_PANEL      0x1082
+#define WS147_COLOR_ACCENT    0x0329
 
 void ws147LcdInit();
 void ws147LcdFillScreen(uint16_t color);
 void ws147LcdFillRect(int x, int y, int w, int h, uint16_t color);
+void ws147LcdDrawHLine(int x, int y, int w, uint16_t color);
+int  ws147LcdStringWidth(const char *text, uint8_t scale);
 void ws147LcdDrawString(int x, int y, const char *text, uint16_t color, uint16_t bg, uint8_t scale);
+void ws147LcdDrawStringCentered(int y, const char *text, uint16_t color, uint16_t bg, uint8_t scale);
 void ws147LcdDrawStringRainbow(int x, int y, const char *text, uint8_t scale);
+void ws147LcdDrawStringRainbowCentered(int y, const char *text, uint8_t scale);
 
 #endif /* ST7789_WS147_H */

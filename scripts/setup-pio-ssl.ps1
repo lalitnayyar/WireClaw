@@ -39,12 +39,18 @@ Download-Wheel "setuptools" "py3-none-any" | Out-Null
 Download-Wheel "wheel" "py3-none-any" | Out-Null
 
 Write-Host "Installing SSL + build deps into PlatformIO..."
+Remove-Item Env:SSLKEYLOGFILE -ErrorAction SilentlyContinue
+Remove-Item Env:SSLKEYLOG -ErrorAction SilentlyContinue
 & $pip install --no-index --find-links $wheelDir --upgrade `
     pip-system-certs wrapt setuptools wheel
 if ($LASTEXITCODE -ne 0) { Write-Error "pip install failed" }
 
 $sitecustomize = Join-Path $env:USERPROFILE ".platformio\penv\Lib\site-packages\sitecustomize.py"
 @'
+import os
+# AVG sets SSLKEYLOGFILE to \\.\avgMonFltProxy\... which breaks pip/urllib3
+os.environ.pop("SSLKEYLOGFILE", None)
+os.environ.pop("SSLKEYLOG", None)
 try:
     import pip_system_certs.wrapt_requests
 except Exception:
