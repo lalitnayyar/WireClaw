@@ -41,6 +41,7 @@ char cfg_wifi_pass[64];
 char cfg_api_key[128];
 char cfg_model[64];
 char cfg_device_name[32];
+char cfg_owner_name[48];
 char cfg_api_base_url[128];
 char cfg_nats_host[64];
 int  cfg_nats_port = 4222;
@@ -57,6 +58,7 @@ static void configDefaults() {
     cfg_api_key[0] = '\0';
     strncpy(cfg_model, "google/gemini-2.5-flash", sizeof(cfg_model));
     strncpy(cfg_device_name, "wireclaw", sizeof(cfg_device_name));
+    cfg_owner_name[0] = '\0';
     cfg_api_base_url[0] = '\0';
     cfg_nats_host[0] = '\0';
     cfg_nats_port = 4222;
@@ -170,6 +172,7 @@ static bool loadConfig() {
         jsonGetString(json_buf, "api_key", cfg_api_key, sizeof(cfg_api_key));
         jsonGetString(json_buf, "model", cfg_model, sizeof(cfg_model));
         jsonGetString(json_buf, "device_name", cfg_device_name, sizeof(cfg_device_name));
+        jsonGetString(json_buf, "owner_name", cfg_owner_name, sizeof(cfg_owner_name));
         jsonGetString(json_buf, "api_base_url", cfg_api_base_url, sizeof(cfg_api_base_url));
         jsonGetString(json_buf, "nats_host", cfg_nats_host, sizeof(cfg_nats_host));
         char port_buf[8];
@@ -1379,6 +1382,7 @@ bool tgSendMessage(const char *text) {
         Serial.printf("[TG] sendMessage failed\n");
         return false;
     }
+    lcdTelegramAlert(false, text);
     return true;
 }
 
@@ -1558,6 +1562,7 @@ static void telegramTick() {
         if (mw == 0) { if (g_debug) Serial.printf("[TG] empty text\n"); return; }
 
         Serial.printf("\n[TG] Message from %s: %s\n", incoming_chat_id, msgBuf);
+        lcdTelegramAlert(true, msgBuf);
 
         /* Slash command? Execute locally, no LLM call */
         if (msgBuf[0] == '/') {

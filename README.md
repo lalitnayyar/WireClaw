@@ -2,7 +2,7 @@
 
 An AI agent that lives on a $5 microcontroller and controls real hardware.
 
-**Supported chips:** ESP32-C6, ESP32-S3, ESP32-C3 (4 MB flash required)
+**Supported chips:** ESP32-C6, ESP32-S3, ESP32-C3 (4 MB flash minimum; **8 MB** recommended for [Waveshare ESP32-C6-LCD-1.47](https://www.waveshare.com/wiki/ESP32-C6-LCD-1.47))
 
 **[Flash it to your ESP32 from the browser](https://wireclaw.io/flash.html)** - no tools to install, configure from your phone. The web flasher auto-detects your chip.
 
@@ -231,7 +231,7 @@ The rule loop and the AI loop share the same `loop()` function but serve differe
 - **Rule Chaining** - `chain_create` tool builds multi-step sequences in one call (e.g. alert + LED change + auto-off), with non-blocking delays
 - **Time-Aware Rules** - NTP sync with POSIX timezone, `clock_hour`, `clock_minute`, and `clock_hhmm` virtual sensors for schedule-based automation
 - **Persistent Memory** - AI remembers user preferences, device nicknames, and observations across reboots
-- **Telegram Alerts** - rules send push notifications with live sensor values via `{device_name}` interpolation, no LLM in the loop
+- **Telegram Alerts** - rules send push notifications with live sensor values via `{device_name}` interpolation, no LLM in the loop. On the Waveshare LCD board, incoming and outgoing Telegram messages also appear as **8-second on-screen alerts**
 - **Device Registry** - named sensors and actuators instead of raw pin numbers, persisted to flash
 - **Serial Bridge** - connect any serial device (Arduino, GPS, CO2 sensor) via UART1; read data as a sensor, send commands via `serial_send`, use in rules with `{name:msg}` interpolation
 - **AI Agent** - agentic loop with 20 tools, up to 5 iterations per message
@@ -242,19 +242,40 @@ The rule loop and the AI loop share the same `loop()` function but serve differe
 - **NATS Virtual Sensors** - subscribe to any NATS subject as a sensor, trigger rules from external systems (Python, Home Assistant, PLCs, other WireClaws)
 - **NATS HAL** - direct hardware access over NATS (`{device}.hal.gpio.5.set "1"` → `ok`) - no LLM, no JSON, just raw request/reply for GPIO, ADC, PWM, UART, system info, and registered devices
 - **NATS Integration** - device-to-device messaging, commands, and rule-triggered events
-- **Web Config Portal** - browser-based UI at `http://<device-ip>/` for editing config, system prompt, memory, and viewing device status. mDNS: `http://<device-name>.local/`
+- **Web Config Portal** - browser-based UI at `http://<device-ip>/` for editing config, system prompt, memory, and viewing device status. mDNS: `http://<device-name>.local/`. **Status tab** shows live benchmarks (heap, CPU, flash, chip temp, LLM stats) with 5 s auto-refresh
+- **Onboard LCD (Waveshare ESP32-C6-LCD-1.47)** - 1.47" ST7789 172×320 status dashboard (2 s refresh), rainbow `owner_name` header, Telegram IN/OUT alert overlays (8 s). See [Onboard LCD Display](#onboard-lcd-display-waveshare-esp32-c6-lcd-147) and [installreadme.md](installreadme.md)
+- **Status & Benchmarks** - metrics on LCD, web Status tab, and serial `/status` (heap, CPU, flash, chip temp, LLM call count, tokens, uptime, rules)
 - **Serial Interface** - local chat and commands over USB (115200 baud)
 - **Conversation History** - 4-turn circular buffer, persisted across reboots
 
 ## Hardware
 
 - **Supported:** ESP32-C6, ESP32-S3, ESP32-C3
+- **Recommended LCD board:** [Waveshare ESP32-C6-LCD-1.47](https://www.waveshare.com/wiki/ESP32-C6-LCD-1.47) — 1.47" ST7789 172×320 display, 8 MB flash, onboard RGB LED (GPIO8)
 - **Platform:** [pioarduino](https://github.com/pioarduino/platform-espressif32) via PlatformIO
 - **Requirements:** WiFi network, [OpenRouter](https://openrouter.ai/) API key or local LLM server
 
-Onboard RGB LED control works out of the box on Espressif DevKit boards with WS2812B (C3, C6, S3). Boards without an onboard RGB LED can skip the `led_set` tool - everything else works the same.
+Onboard RGB LED control works out of the box on Espressif DevKit boards with WS2812B (C3, C6, S3) and on the Waveshare LCD board (GPIO8). Boards without an onboard RGB LED can skip the `led_set` tool - everything else works the same.
 
 The dev board alone is enough to get started - chip temperature sensor, clock sensors, and RGB LED work out of the box. Add external sensors and actuators as needed.
+
+### Onboard LCD display (Waveshare ESP32-C6-LCD-1.47)
+
+WireClaw drives the built-in **ST7789** panel directly (no LVGL/TFT_eSPI). Build with PlatformIO env **`esp32-c6-lcd`** (default in this fork).
+
+| LCD feature | Description |
+|-------------|-------------|
+| **Status dashboard** | IP, heap, min heap, chip temp, CPU MHz, device name, WiFi RSSI, uptime, last LLM time/tokens, LLM call count, model |
+| **Refresh rate** | Status view updates every **2 seconds** |
+| **Rainbow owner name** | Set `owner_name` in `config.json` — displayed under the WireClaw header with a different color per letter |
+| **Telegram IN** | Green **TELEGRAM IN** banner + message preview when you text the bot (**8 s** overlay) |
+| **Telegram OUT** | Orange **TELEGRAM OUT** banner when WireClaw sends (AI reply, rule alert, startup ping) (**8 s** overlay) |
+| **Temp colors** | Chip temp line uses green / orange (≥ 45 °C) / red (≥ 55 °C) |
+| **RGB heartbeat** | GPIO8 LED pulses cyan (cool) / orange (warm) / red (hot) when not overridden by a tool |
+
+**LCD SPI pins (fixed on board):** MOSI=6, SCLK=7, CS=14, DC=15, RST=21, BL=22
+
+Full flash instructions, Windows/AVG troubleshooting, and serial port detection: **[installreadme.md](installreadme.md)**
 
 ## Quick Start
 
@@ -276,11 +297,15 @@ To reconfigure later, type `/setup` in the serial monitor to re-enter the portal
 
 ### Option B: Manual Config (PlatformIO)
 
+> **Windows + Waveshare LCD board:** See **[installreadme.md](installreadme.md)** for `scripts/flash.py`, AVG/SSL fixes, and `esp32-c6-lcd` build target.
+
 #### 1. Install PlatformIO
 
 ```
 pip install platformio
 ```
+
+On Windows with AVG antivirus, run the one-time setup in [installreadme.md](installreadme.md) before your first build.
 
 #### 2. Configure
 
@@ -297,6 +322,7 @@ Edit `data/config.json`:
   "api_key": "sk-or-v1-your-openrouter-api-key",
   "model": "google/gemini-2.5-flash",
   "device_name": "wireclaw-01",
+  "owner_name": "Your Name",
   "api_base_url": "",
   "nats_host": "",
   "nats_port": "4222",
@@ -306,6 +332,8 @@ Edit `data/config.json`:
   "timezone": "CET-1CEST,M3.5.0,M10.5.0/3"
 }
 ```
+
+`owner_name` is shown on the Waveshare LCD header in rainbow colors (requires `esp32-c6-lcd` build). Leave empty to hide the name line.
 
 Leave `telegram_token` empty to disable Telegram. Leave `nats_host` empty to disable NATS. Leave `api_base_url` empty to use OpenRouter (default).
 
@@ -336,13 +364,24 @@ See [docs/RULE-CHAINING.md](docs/RULE-CHAINING.md#appendix-a-model-comparison) f
 
 #### 3. Build and Flash
 
-The default target is ESP32-C6. To build for a different chip, pass `-e <target>`:
+The default target in this fork is **`esp32-c6-lcd`** (Waveshare 1.47" LCD board). Use **`esp32-c6`** for a plain DevKit without display.
 
-| Target | Board | Command |
-|--------|-------|---------|
-| ESP32-C6 | esp32-c6-devkitc-1 | `pio run` (default) |
-| ESP32-S3 | esp32-s3-devkitc-1 | `pio run -e esp32-s3` |
-| ESP32-C3 | esp32-c3-devkitm-1 | `pio run -e esp32-c3` |
+**Recommended (Python script):**
+
+```powershell
+python scripts/flash.py --port COM3              # firmware + config (LCD board)
+python scripts/flash.py --port COM3 -e esp32-c6  # plain DevKit, no LCD
+python scripts/flash.py --port COM3 --monitor    # flash + serial monitor
+```
+
+**PlatformIO commands:**
+
+| Target | Board | Env | Command |
+|--------|-------|-----|---------|
+| ESP32-C6 + LCD | Waveshare ESP32-C6-LCD-1.47 | `esp32-c6-lcd` | `pio run` (default) |
+| ESP32-C6 DevKit | esp32-c6-devkitc-1 | `esp32-c6` | `pio run -e esp32-c6` |
+| ESP32-S3 | esp32-s3-devkitc-1 | `esp32-s3` | `pio run -e esp32-s3` |
+| ESP32-C3 | esp32-c3-devkitm-1 | `esp32-c3` | `pio run -e esp32-c3` |
 
 ```
 pio run -t uploadfs    # upload config + system prompt to filesystem
@@ -352,12 +391,23 @@ pio device monitor     # connect via serial (115200 baud)
 
 For non-default targets, add `-e <target>` to each command (e.g. `pio run -e esp32-s3 -t upload`).
 
-Type a message and press Enter. Or open Telegram and text your bot.
+#### 4. Verify status & benchmarks
+
+After WiFi connects, check metrics in three places:
+
+| Where | How |
+|-------|-----|
+| **LCD** (Waveshare board) | Onboard screen — status every 2 s; Telegram alerts for 8 s |
+| **Web** | `http://<device-name>.local/` → **Status** tab (auto-refresh 5 s) |
+| **Serial** | `python scripts/flash.py --port COM3 --monitor` → type `/status` |
+
+Type a message and press Enter in the serial monitor. Or open Telegram and text your bot — watch the LCD for **TELEGRAM IN** / **TELEGRAM OUT** alerts.
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
+| **[Install & Flash (Windows / LCD)](installreadme.md)** | `flash.py`, Waveshare LCD board, benchmarks, Telegram LCD alerts, AVG/SSL troubleshooting |
 | [Getting Started Examples](docs/EXAMPLES.md) | Walkthrough examples using just a bare dev board |
 | [Configuration Reference](docs/CONFIGURATION.md) | Setup portal, web config, config fields, local LLM, persistent memory |
 | [Device Registry](docs/DEVICE-REGISTRY.md) | All sensor and actuator types |

@@ -25,5 +25,6 @@ void ws147LcdInit();
 void ws147LcdFillScreen(uint16_t color);
 void ws147LcdFillRect(int x, int y, int w, int h, uint16_t color);
 void ws147LcdDrawString(int x, int y, const char *text, uint16_t color, uint16_t bg, uint8_t scale);
+void ws147LcdDrawStringRainbow(int x, int y, const char *text, uint8_t scale);
 
 #endif /* ST7789_WS147_H */

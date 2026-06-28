@@ -1,6 +1,8 @@
 # WireClaw — Install & Flash (Windows / ESP32-C6)
 
-Guide for building, flashing, and using WireClaw on ESP32-C6 boards — including the **Waveshare ESP32-C6-LCD-1.47** with onboard 1.47" display.
+Guide for building, flashing, and using WireClaw on ESP32-C6 boards — including the **Waveshare ESP32-C6-LCD-1.47** with onboard 1.47" display, live benchmarks, rainbow owner name, and Telegram alert overlays.
+
+For WireClaw capabilities (AI agent, rules, Telegram, NATS), see [README.md](README.md).
 
 ---
 
@@ -30,6 +32,27 @@ Guide for building, flashing, and using WireClaw on ESP32-C6 boards — includin
 | Backlight (BL) | 22 |
 
 WireClaw includes a built-in ST7789 driver for this board (no TFT_eSPI — it does not compile on ESP32-C6 + Arduino 3.x).
+
+### LCD feature overview
+
+```
+┌─────────────────────────────┐
+│ WireClaw          v0.x      │
+│ L A L I T   N A Y Y A R     │  ← owner_name (rainbow)
+├─────────────────────────────┤
+│ IP          192.168.x.x     │
+│ Heap        123 / 456 KB    │  ← status view (2 s refresh)
+│ Chip temp   42.1 C          │
+│ ...                         │
+└─────────────────────────────┘
+
+Telegram message → 8 s alert overlay:
+┌─────────────────────────────┐
+│ ■ TELEGRAM IN  (green)      │
+│ Your message text here...   │
+│ back in 6s                  │
+└─────────────────────────────┘
+```
 
 ---
 
@@ -106,7 +129,9 @@ Key fields:
 | `api_key` | OpenRouter (or compatible) API key |
 | `model` | LLM model name (e.g. `google/gemini-2.5-flash`) |
 | `device_name` | mDNS hostname (e.g. `wireclaw-01` → `http://wireclaw-01.local/`) |
-| `telegram_token` / `telegram_chat_id` | Optional Telegram bot |
+| `owner_name` | Your name on the LCD header (rainbow colors), e.g. `Lalit Nayyar` |
+| `telegram_token` / `telegram_chat_id` | Optional Telegram bot (enables LCD alert overlays) |
+| `telegram_cooldown` | Minimum seconds between rule-triggered Telegram sends |
 | `timezone` | POSIX TZ string (e.g. `UTC4`) |
 
 Reboot required after changing config via web UI. Reflash filesystem or use web Save + Reboot for initial upload.
@@ -227,21 +252,55 @@ WireClaw exposes the same core metrics in three places: **onboard LCD**, **web U
 
 ### 1. Onboard LCD (Waveshare ESP32-C6-LCD-1.47 only)
 
-Build with `esp32-c6-lcd` (default). The screen updates every **2 seconds** and shows:
+Build with `esp32-c6-lcd` (default).
+
+#### Status dashboard (normal view)
+
+Refreshes every **2 seconds**:
 
 | Line | Metric |
 |------|--------|
-| Header | WireClaw version |
+| Header | **WireClaw** + version |
+| Header | **`owner_name` in rainbow** (from `config.json`, e.g. `Lalit Nayyar`) |
 | IP | WiFi IP (or `connecting...`) |
 | Heap | Free / total KB |
 | Min heap | Lowest free heap since boot |
-| Chip temp | °C (green / orange / red by temperature) |
+| Chip temp | °C (green / orange ≥ 45 °C / red ≥ 55 °C) |
 | CPU | MHz |
 | Device | `device_name` + WiFi RSSI |
 | Uptime | Hours, minutes, seconds |
 | Last LLM | Last call duration + token counts |
 | LLM | Total calls + history turns |
 | Model | Configured LLM model |
+
+#### Rainbow owner name
+
+Set in `config.json`:
+
+```json
+"owner_name": "Lalit Nayyar"
+```
+
+Each letter is drawn in a rotating rainbow color under the WireClaw header. Update the filesystem after changes:
+
+```powershell
+python scripts\flash.py --port COM3 --fs-only
+```
+
+#### Telegram alerts on LCD
+
+When Telegram is enabled, the LCD temporarily switches from the status dashboard to an alert overlay for **8 seconds**:
+
+| Direction | Banner | When |
+|-----------|--------|------|
+| **IN** | Green **TELEGRAM IN** | You send a message to the bot (including `/status`, chat, commands) |
+| **OUT** | Orange **TELEGRAM OUT** | WireClaw sends a reply, rule alert, or startup notification |
+
+The message text is shown (wrapped to fit the screen). A footer counts down (`back in Xs`), then the status dashboard returns automatically.
+
+Rule-based Telegram alerts (e.g. chip temp > 40 °C) trigger **TELEGRAM OUT** on the LCD as well as on your phone.
+
+#### LCD troubleshooting
 
 If the backlight is on but text is missing, re-flash with `esp32-c6-lcd` (not `esp32-c6`). If fully dark, check USB power and press **RESET**.
 
@@ -413,11 +472,40 @@ python scripts\flash.py --port COM3
 
 ## Summary of WireClaw enhancements (this fork)
 
+### Flash & tooling
+
 - **`scripts/flash.py`** — Python flash tool with COM auto-detect, step progress, Windows SSL/UTF-8 fixes
 - **`scripts/pio.ps1`** — PlatformIO wrapper for AVG/Windows
 - **`scripts/setup-pio-ssl.ps1`** — Offline SSL and build-deps fix for PlatformIO Python
-- **`esp32-c6-lcd` env** — Waveshare 1.47" ST7789 onboard display driver + GPIO8 RGB LED
-- **LCD status screen** — IP, heap, temp, CPU, uptime, LLM benchmarks (2 s refresh)
-- **Web Status tab** — Benchmarks section, default tab, 5 s auto-refresh, improved error handling
+- **`scripts/bootstrap-platform.ps1`** — One-time ESP32 platform bootstrap
+- **`esp32-c6-lcd` env** — Default build for Waveshare 1.47" board (8 MB flash)
+
+### Onboard LCD (Waveshare ESP32-C6-LCD-1.47)
+
+Built-in **ST7789** driver (`src/st7789_ws147.cpp`, `src/lcd_display.cpp`) — no TFT_eSPI dependency.
+
+| Feature | Detail |
+|---------|--------|
+| **Status dashboard** | IP, heap, min heap, chip temp, CPU, device/RSSI, uptime, LLM stats, model — refreshes every **2 s** |
+| **Rainbow owner name** | `owner_name` from `config.json` shown under the WireClaw header (each letter a different color) |
+| **Telegram IN alert** | Green banner + message text when a Telegram message is received — **8 s** overlay |
+| **Telegram OUT alert** | Orange banner + message text when WireClaw sends Telegram (replies, rules, startup) — **8 s** overlay |
+| **Alert countdown** | Footer shows `back in Xs` until status view returns |
+| **Temperature colors** | Chip temp label: green / orange (≥ 45 °C) / red (≥ 55 °C) on LCD |
+| **RGB LED** | GPIO8 WS2812 — heartbeat cyan / orange / red by chip temperature |
+
+Change `owner_name` in `config.json`, then:
+
+```powershell
+python scripts\flash.py --port COM3 --fs-only
+```
+
+Or edit via web config (requires reboot + filesystem save for `owner_name` if added to web UI later — currently set in `config.json` only).
+
+### Web & serial status
+
+- **Web Status tab** — Benchmarks section, default tab, 5 s auto-refresh, cache-busting, error handling
 - **Serial `/status`** — Full benchmark dump; boot-time status summary after WiFi connect
-- **Temperature LED heartbeat** — Cyan / orange / red by chip temperature
+- **Temperature LED heartbeat** — Cyan / orange / red by chip temperature (DevKit or LCD board)
+
+See also [README.md](README.md) for WireClaw features, rule engine, and Telegram integration.

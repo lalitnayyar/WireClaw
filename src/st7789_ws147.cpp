@@ -227,4 +227,29 @@ void ws147LcdDrawString(int x, int y, const char *text, uint16_t color, uint16_t
     }
 }
 
+void ws147LcdDrawStringRainbow(int x, int y, const char *text, uint8_t scale) {
+    if (!text) return;
+    static const uint16_t colors[] = {
+        WS147_COLOR_RED, WS147_COLOR_ORANGE, WS147_COLOR_YELLOW,
+        WS147_COLOR_GREEN, WS147_COLOR_CYAN, WS147_COLOR_MAGENTA,
+        WS147_COLOR_WHITE
+    };
+    const int ncolors = (int)(sizeof(colors) / sizeof(colors[0]));
+    int cx = x;
+    int adv = (5 + 1) * scale;
+    int ci = 0;
+    while (*text) {
+        if (*text == ' ') {
+            cx += adv;
+            text++;
+            continue;
+        }
+        drawChar5x7(cx, y, *text, colors[ci % ncolors], WS147_COLOR_BLACK, scale);
+        ci++;
+        cx += adv;
+        if (cx > WS147_LCD_W - adv) break;
+        text++;
+    }
+}
+
 #endif /* WIRECLAW_LCD_WS147 */
